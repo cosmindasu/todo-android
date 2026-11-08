@@ -1,11 +1,39 @@
-# Learning Todo (Expo + TypeScript, Android only)
+# Android Todo (Expo + TypeScript)
 
-A deliberately tiny todo app: projects, tasks with notes, three states
-(not started / in progress / done), an optional due date with a local reminder,
-and up to three attached files per task. It exists to teach the Android-specific parts you
-cannot learn from the web: runtime permissions, exact alarms, notification
-channels, SQLite schema migrations, edge-to-edge layout, font scaling, dark mode.
-It is **not** meant for Google Play. No backend, no accounts, no analytics.
+A todo app small enough to read in an afternoon, written to get the
+Android-specific parts right rather than to be large. Projects, tasks with
+notes, three states (not started / in progress / done), an optional due date
+with a local reminder, and up to three attached files per task.
+
+The interesting part is not the todo list. It is everything Android puts
+between "the code schedules a reminder" and "the reminder appears": three
+independent permission gates, alarms that are exact only if you ask, a schema
+that has to survive upgrades on real data, and files that arrive as a borrowed
+URI rather than as bytes. Each of those is handled explicitly here, and the
+claims below were checked on a device rather than reasoned about.
+
+No backend, no accounts, no analytics, and it is not published on Google Play.
+
+## What was checked on a device, and what that found
+
+Every number in this README was measured on an Android 16 (API 36) emulator.
+Five problems came out of doing that rather than reading the code — four in the
+app, one in this README — and all five are the kind that look fine until you
+look:
+
+| Checked | What it found |
+| --- | --- |
+| The three notification gates, one at a time | All behave as designed: no permission dialog at launch, the prompt appears at the moment a reminder is asked for, and a denial leaves the task saved with the reason stated rather than failing silently |
+| `dumpsys alarm`, with and without `SCHEDULE_EXACT_ALARM` | Without it the alarm carries a **16.5-second window**; with it, `window=0` and `exactAllowReason=permission`. The "exact alarms" switch is not cosmetic |
+| Upgrading a **real v3 database**, not a fresh install | The v4-v6 migrations preserved both existing tasks, their due dates and their reminder state, and moved them into the default project |
+| Reading the attached bytes back off the device | A row said `ui.xml · 25459` while the file was **11359 bytes**: the picker reports a size from a DocumentsProvider that can be stale. The size now comes from the bytes actually written |
+| What the file picker calls a file | `edge-420.jpg` arrived as **`image:26`**. A `File` built from a `content://` URI takes its name from the URI; only a ContentResolver query knows the real one |
+| The permissions in the built APK | The README used to list 4. The APK declares **24** — see [Privacy / permissions](#privacy--permissions) |
+| The screen itself, not the layout code | A `ScrollView` grows on its cross axis (a band of empty space above the list), and a `Modal` does not inherit the activity's `adjustResize` (a dialog behind the keyboard) |
+
+The pure logic — the reminder reconcile plan, the per-task lock, the task state
+machine, the attachment rules — is tested with `node --test` and no framework:
+35 tests, under a second, run on every push.
 
 Stack: Expo SDK 58, React Native 0.88, React 19, TypeScript (strict),
 `expo-sqlite`, `expo-notifications`, `@react-native-community/datetimepicker`,
@@ -193,6 +221,7 @@ and cannot silently change). Verified in a generated `android/gradle.properties`
 enforced (hence the safe-area insets in the code) and predictive back is on.
 
 ## Privacy / permissions
+<a id="privacy--permissions"></a>
 
 This section used to list four permissions. The built APK declares **24**. The
 list below is read out of the APK, not out of `app.config.ts`, because those
