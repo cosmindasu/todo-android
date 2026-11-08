@@ -194,15 +194,68 @@ enforced (hence the safe-area insets in the code) and predictive back is on.
 
 ## Privacy / permissions
 
-Declared by this app: `POST_NOTIFICATIONS`, `SCHEDULE_EXACT_ALARM`, plus
-`RECEIVE_BOOT_COMPLETED` (added by expo-notifications), `VIBRATE`.
-`INTERNET`, `ACCESS_NETWORK_STATE` and `SYSTEM_ALERT_WINDOW` are REMOVED from
-preview/production builds (`blockedPermissions` in `app.config.ts`) because the
-app makes no network calls. Development builds keep them (Metro and the dev
-menu need them): EAS sets `EAS_BUILD_PROFILE=development` itself; for a local
-`expo run:android` dev build export `ALLOW_DEV_NETWORK=1` first, or the dev
-client cannot reach Metro. Storage permissions are explicitly removed. The data
-lives only in `todos.db` in the app's private storage.
+This section used to list four permissions. The built APK declares **24**. The
+list below is read out of the APK, not out of `app.config.ts`, because those
+are different things: a library's manifest is merged into yours, and nothing
+asks you first.
+
+**Asked for on purpose** (`app.config.ts`, plus the prebuild template):
+
+| Permission | Why |
+| --- | --- |
+| `POST_NOTIFICATIONS` | the runtime permission for reminders (Android 13+) |
+| `SCHEDULE_EXACT_ALARM` | so a reminder arrives at the minute (Android 12+) |
+| `VIBRATE` | added by the Expo template; the reminder channel uses it |
+
+**Arrived with the libraries**, every one of them through `expo-notifications`
+and its transitive dependencies:
+
+| Permission(s) | Comes from |
+| --- | --- |
+| `RECEIVE_BOOT_COMPLETED` | `expo-notifications`, to re-arm alarms after a reboot |
+| `WAKE_LOCK`, `com.google.android.c2dm.permission.RECEIVE` | Firebase Cloud Messaging, which `expo-notifications` links in even though this app sends no remote push |
+| `com.android.installreferrer...BIND_GET_INSTALL_REFERRER_SERVICE` | the Play Install Referrer library, pulled in the same way |
+| 15 OEM badge permissions (`com.sec...`, `com.huawei...`, `com.oppo...`, `me.everything...`, `READ_APP_BADGE`, ...) | `me.leolin:ShortcutBadger:1.1.22`, an explicit dependency in `expo-notifications/android/build.gradle`, so unread-count badges work on OEM launchers |
+| `...DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` | `androidx.core`; a self-scoped permission that guards the app's own runtime receivers |
+
+Worth noticing: the app asks to receive Firebase messages while having no
+`INTERNET` permission at all. Neither half is wrong on its own, and together
+they are harmless, but it is a fair illustration of how little the manifest you
+wrote has to do with the manifest you ship.
+
+**Removed on purpose.** `INTERNET`, `ACCESS_NETWORK_STATE`, `SYSTEM_ALERT_WINDOW`
+and both external-storage permissions are listed in `blockedPermissions` and
+appear in the generated manifest as `tools:node="remove"`; they are absent from
+the final APK (checked, not assumed). The block beats a library that asks for
+the same thing, which is the part worth knowing — the merger report says so in
+as many words:
+
+```
+uses-permission#android.permission.ACCESS_NETWORK_STATE
+  ADDED from .../app/src/main/AndroidManifest.xml
+  REJECTED from [com.google.firebase:firebase-messaging:25.0.1]
+  REJECTED from [com.google.firebase:firebase-installations:18.0.0]
+```
+ The app makes no network calls, and task
+data and attachments live only in its private storage. Development builds keep
+the network ones, because Metro and the dev menu need them: EAS sets
+`EAS_BUILD_PROFILE=development` itself, and for a local `expo run:android` dev
+build export `ALLOW_DEV_NETWORK=1` first or the dev client cannot reach Metro.
+
+The badge, Firebase and install-referrer permissions could be stripped the same
+way, since nothing here uses them. They are left in deliberately: removing them
+would hide the lesson, which is that **the only honest source for this list is
+the APK**. Read yours with:
+
+```bash
+aapt2 dump permissions android/app/build/outputs/apk/release/app-release.apk | grep uses-permission
+```
+
+and attribute each one with the merger report Gradle already wrote:
+
+```bash
+grep -B 1 -A 3 "^uses-permission#" android/app/build/outputs/logs/manifest-merger-release-report.txt
+```
 
 `USE_EXACT_ALARM` is deliberately not declared: Google Play restricts it to
 alarm-clock and calendar apps, and it would be the wrong one to learn.
