@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'LICENSE', 'docs/**']
+  pull_request:
+    paths-ignore: ['**.md', 'LICENSE', 'docs/**']
+
+# A new push supersedes the run already in flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # One job on purpose: typecheck and tests together take seconds, and every
+    # job is billed rounded up to a whole minute.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Node 22 runs the TypeScript tests directly: `node --test` strips
+          # types natively since 22.18, so there is no test framework and no
+          # build step before the suite.
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
