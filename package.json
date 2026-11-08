@@ -7,6 +7,8 @@
     "expo": "~58.0.23",
     "expo-build-properties": "~58.0.12",
     "expo-dev-client": "~58.0.18",
+    "expo-document-picker": "~58.0.4",
+    "expo-file-system": "~58.0.13",
     "expo-notifications": "~58.1.8",
     "expo-sqlite": "~58.0.15",
     "expo-status-bar": "~58.0.4",
@@ -24,7 +26,7 @@
     "start": "expo start",
     "android": "expo run:android",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/notifications/*.test.ts",
+    "test": "node --test src/*/*.test.ts",
     "doctor": "expo-doctor",
     "prebuild": "expo prebuild --platform android --no-install"
   },

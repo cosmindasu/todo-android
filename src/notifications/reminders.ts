@@ -24,6 +24,8 @@ import {
   setReminderMissed,
 } from '../db/todos';
 import type { SQLiteDatabase } from 'expo-sqlite';
+import { takeAttachmentsOf } from '../db/attachments';
+import { deleteStored } from '../files/attachmentStore';
 import { createKeyedMutex } from './keyedMutex';
 import {
   EXACT_ALARM_META_KEY,
@@ -219,14 +221,22 @@ async function cancelLocked(db: SQLiteDatabase, todoId: number): Promise<void> {
 }
 
 /**
- * Delete a task and its alarm as ONE locked step. If a sync for the same task
- * were still in flight, it could otherwise schedule a new alarm after we cancel
- * but before the row disappears.
+ * Delete a task and EVERYTHING that belongs to it, as one locked step. If a
+ * sync for the same task were still in flight, it could otherwise schedule a
+ * new alarm after we cancel but before the row disappears.
+ *
+ * Attachments are part of "everything": the foreign key on `attachments`
+ * refuses to let a task with files be deleted, which is the point — it makes
+ * forgetting them impossible rather than merely unlikely. The rows go first
+ * and the bytes after, so a failure cannot leave a row pointing at a file that
+ * is no longer there.
  */
 export function deleteTaskAndReminder(db: SQLiteDatabase, todoId: number): Promise<void> {
   return withTaskLock(lockKey(todoId), async () => {
     await cancelLocked(db, todoId); // before the row (and its notification_id) is gone
+    const files = await takeAttachmentsOf(db, todoId);
     await deleteTodo(db, todoId);
+    for (const storedAs of files) deleteStored(storedAs);
   });
 }
 

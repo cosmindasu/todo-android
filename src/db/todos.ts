@@ -1,9 +1,13 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
-export interface Todo {
+import type { TaskProgress } from './taskState';
+
+export interface Todo extends TaskProgress {
   id: number;
+  projectId: number;
   title: string;
-  done: boolean;
+  /** Free text beside the one-line title. Empty string, never null. */
+  description: string;
   /** Epoch ms (UTC) or null. */
   dueAt: number | null;
   remind: boolean;
@@ -17,8 +21,13 @@ export interface Todo {
 /** Raw row shape as SQLite returns it (snake_case, 0/1 instead of booleans). */
 interface TodoRow {
   id: number;
+  project_id: number;
   title: string;
+  description: string;
   done: number;
+  in_progress: number;
+  started_at: number | null;
+  done_at: number | null;
   due_at: number | null;
   remind: number;
   notification_id: string | null;
@@ -29,8 +38,13 @@ interface TodoRow {
 function fromRow(r: TodoRow): Todo {
   return {
     id: r.id,
+    projectId: r.project_id,
     title: r.title,
+    description: r.description,
     done: r.done === 1,
+    inProgress: r.in_progress === 1,
+    startedAt: r.started_at,
+    doneAt: r.done_at,
     dueAt: r.due_at,
     remind: r.remind === 1,
     notificationId: r.notification_id,
@@ -41,19 +55,36 @@ function fromRow(r: TodoRow): Todo {
 
 export interface TodoInput {
   title: string;
+  description: string;
   dueAt: number | null;
   remind: boolean;
 }
 
-// Open tasks first; among those, soonest due date first, undated last.
-// Completed tasks sink to the bottom, most recently created first.
+// Open tasks first, and what is being worked on right now above the rest of
+// them; among equals, soonest due date first, undated last. Completed tasks
+// sink to the bottom, most recently created first.
 const ORDER = `ORDER BY done ASC,
+  in_progress DESC,
   CASE WHEN due_at IS NULL THEN 1 ELSE 0 END ASC,
   due_at ASC,
   created_at DESC`;
 
+/**
+ * EVERY task, across all projects. This is what the reminder code reconciles
+ * against: an OS alarm belongs to a task, not to whichever project happens to
+ * be on screen, so filtering here would strand alarms in hidden projects.
+ */
 export async function listTodos(db: SQLiteDatabase): Promise<Todo[]> {
   const rows = await db.getAllAsync<TodoRow>(`SELECT * FROM todos ${ORDER}`);
+  return rows.map(fromRow);
+}
+
+/** What the screen shows: one project's tasks. */
+export async function listTodosInProject(db: SQLiteDatabase, projectId: number): Promise<Todo[]> {
+  const rows = await db.getAllAsync<TodoRow>(
+    `SELECT * FROM todos WHERE project_id = ? ${ORDER}`,
+    projectId,
+  );
   return rows.map(fromRow);
 }
 
@@ -62,11 +93,18 @@ export async function getTodo(db: SQLiteDatabase, id: number): Promise<Todo | nu
   return row ? fromRow(row) : null;
 }
 
-export async function insertTodo(db: SQLiteDatabase, input: TodoInput): Promise<number> {
+export async function insertTodo(
+  db: SQLiteDatabase,
+  projectId: number,
+  input: TodoInput,
+): Promise<number> {
   // Always use bound parameters (?), never string-concatenate user text into SQL.
   const result = await db.runAsync(
-    'INSERT INTO todos (title, due_at, remind, created_at) VALUES (?, ?, ?, ?)',
+    `INSERT INTO todos (project_id, title, description, due_at, remind, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    projectId,
     input.title,
+    input.description,
     input.dueAt,
     input.remind ? 1 : 0,
     Date.now(),
@@ -77,16 +115,34 @@ export async function insertTodo(db: SQLiteDatabase, input: TodoInput): Promise<
 export async function updateTodo(db: SQLiteDatabase, id: number, input: TodoInput): Promise<void> {
   await db.runAsync(
     // Editing the task starts a fresh reminder story, so the "missed" flag resets.
-    'UPDATE todos SET title = ?, due_at = ?, remind = ?, reminder_missed = 0 WHERE id = ?',
+    `UPDATE todos SET title = ?, description = ?, due_at = ?, remind = ?, reminder_missed = 0
+     WHERE id = ?`,
     input.title,
+    input.description,
     input.dueAt,
     input.remind ? 1 : 0,
     id,
   );
 }
 
-export async function setDone(db: SQLiteDatabase, id: number, done: boolean): Promise<void> {
-  await db.runAsync('UPDATE todos SET done = ? WHERE id = ?', done ? 1 : 0, id);
+/**
+ * Write a whole progress state at once. The three columns move together (see
+ * taskState.ts), so writing them one at a time would let a reader observe a
+ * task that is both done and in progress.
+ */
+export async function setProgress(
+  db: SQLiteDatabase,
+  id: number,
+  p: TaskProgress,
+): Promise<void> {
+  await db.runAsync(
+    'UPDATE todos SET done = ?, in_progress = ?, started_at = ?, done_at = ? WHERE id = ?',
+    p.done ? 1 : 0,
+    p.inProgress ? 1 : 0,
+    p.startedAt,
+    p.doneAt,
+    id,
+  );
 }
 
 export async function setNotificationId(

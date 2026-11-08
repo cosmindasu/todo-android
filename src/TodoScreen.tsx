@@ -4,12 +4,35 @@ import { Alert, AppState, FlatList, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button, TodoEditor } from './components/TodoEditor';
+import { NameDialog, ProjectBar } from './components/ProjectBar';
+import type { AttachmentPlan } from './components/TodoEditor';
 import { ReminderBanner } from './components/ReminderBanner';
 import { TodoItem } from './components/TodoItem';
 import {
+  deleteProject,
+  getActiveProjectId,
+  insertProject,
+  listProjects,
+  listTodoIdsInProject,
+  renameProject,
+  setActiveProjectId,
+  type Project,
+} from './db/projects';
+import {
+  allStoredNames,
+  attachmentCounts,
+  deleteAttachment,
+  insertAttachment,
+  listAttachments,
+  type Attachment,
+} from './db/attachments';
+import { storedFileName } from './db/attachmentLimit';
+import { deleteStored, storeAttachment, sweepStrays } from './files/attachmentStore';
+import { applyTaskAction, type TaskAction } from './db/taskState';
+import {
   insertTodo,
-  listTodos,
-  setDone,
+  listTodosInProject,
+  setProgress,
   updateTodo,
   type Todo,
   type TodoInput,
@@ -32,10 +55,70 @@ export function TodoScreen() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [editing, setEditing] = useState<Todo | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [projects, setProjects] = useState<Project[]>([]);
+  // null only until the first load finishes; `chooseActiveProject` guarantees
+  // a real id afterwards as long as any project exists.
+  const [activeId, setActiveId] = useState<number | null>(null);
+  const [naming, setNaming] = useState<{ mode: 'add' } | { mode: 'rename'; project: Project } | null>(
+    null,
+  );
+  const [counts, setCounts] = useState<Map<number, number>>(new Map());
+  const [editingFiles, setEditingFiles] = useState<Attachment[]>([]);
+
+  const loadProjects = useCallback(async () => {
+    const [list, active] = await Promise.all([listProjects(db), getActiveProjectId(db)]);
+    setProjects(list);
+    setActiveId(active);
+    return active;
+  }, [db]);
 
   const reload = useCallback(async () => {
-    setTodos(await listTodos(db));
-  }, [db]);
+    const active = activeId ?? (await loadProjects());
+    const [rows, byTodo] = await Promise.all([
+      active === null ? Promise.resolve([]) : listTodosInProject(db, active),
+      attachmentCounts(db),
+    ]);
+    setTodos(rows);
+    setCounts(byTodo);
+  }, [db, activeId, loadProjects]);
+
+  /** Open the editor, with this task's files already loaded. */
+  const openEditor = useCallback(
+    async (todo: Todo | null) => {
+      setEditing(todo);
+      setEditingFiles(todo ? await listAttachments(db, todo.id).catch(() => []) : []);
+      setEditorOpen(true);
+    },
+    [db],
+  );
+
+  /**
+   * Carry out what the editor planned, now that the row certainly exists.
+   *
+   * Bytes are written BEFORE the row that points at them. The other order can
+   * leave a row referring to a file that was never written — a broken
+   * attachment — while this order can at worst leave a file nothing
+   * references, which costs space and is swept up later.
+   */
+  const applyAttachmentPlan = useCallback(
+    async (todoId: number, plan: AttachmentPlan) => {
+      for (const id of plan.removeIds) {
+        const storedAs = await deleteAttachment(db, id);
+        if (storedAs) deleteStored(storedAs);
+      }
+      let seq = Date.now();
+      for (const picked of plan.add) {
+        const storedAs = storedFileName(seq++, picked.name);
+        await storeAttachment(picked.uri, storedAs);
+        await insertAttachment(db, todoId, {
+          name: picked.name,
+          size: picked.size,
+          storedAs,
+        });
+      }
+    },
+    [db],
+  );
 
   // Make the OS alarms match the database, then refresh the list: reconcile
   // writes fresh notification_ids to SQLite, and without this reload the screen
@@ -52,6 +135,28 @@ export function TodoScreen() {
   // Reconcile is NOT a one-off. The OS can change under a running or sleeping
   // app, so we re-run it (1) at startup, (2) every time the app returns to the
   // foreground, and (3) when a permission flips (effect below).
+  useEffect(() => {
+    void loadProjects();
+  }, [loadProjects]);
+
+  // The same idea as reconciling alarms, for bytes: a crash between writing an
+  // attachment and committing its row leaves a file nothing points at. Once at
+  // startup, remove those.
+  //
+  // This DELETES files, so it runs only on a set we actually read. If the
+  // query fails, `allStoredNames` throws and the sweep is skipped — passing an
+  // empty set after a failed read would delete every attachment in the app.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const known = await allStoredNames(db);
+        sweepStrays(known);
+      } catch {
+        // Leaving a stray file costs space and nothing else.
+      }
+    })();
+  }, [db]);
+
   useEffect(() => {
     void reload();
     void reconcileAndReload();
@@ -84,7 +189,7 @@ export function TodoScreen() {
   // not insert a second copy.
   const insertedIdRef = useRef<number | null>(null);
 
-  async function handleSave(input: TodoInput) {
+  async function handleSave(input: TodoInput, plan: AttachmentPlan) {
     if (savingRef.current) return;
     savingRef.current = true;
     try {
@@ -92,9 +197,12 @@ export function TodoScreen() {
       if (id !== null) {
         await updateTodo(db, id, input);
       } else {
-        id = await insertTodo(db, input);
+        if (activeId === null) throw new Error('No project is selected.');
+        id = await insertTodo(db, activeId, input);
         insertedIdRef.current = id; // remember it in case a later step throws
       }
+
+      await applyAttachmentPlan(id, plan);
 
       if (input.remind) {
         // Ask for permission here, at the moment the user asks for a reminder,
@@ -122,14 +230,90 @@ export function TodoScreen() {
     }
   }
 
-  async function handleToggle(todo: Todo) {
+  async function handleAction(todo: Todo, action: TaskAction) {
     try {
-      await setDone(db, todo.id, !todo.done);
-      await syncReminder(db, todo.id); // done => cancels; un-done => re-arms
+      await setProgress(db, todo.id, applyTaskAction(todo, action, Date.now()));
+      await syncReminder(db, todo.id); // done => cancels; reopened => re-arms
     } catch (e) {
       Alert.alert('Could not update the task', String(e));
     } finally {
       await reload().catch(() => {}); // always show what the DB really says
+    }
+  }
+
+  async function handleProjectName(name: string) {
+    const current = naming;
+    setNaming(null);
+    if (!current) return;
+    try {
+      if (current.mode === 'add') {
+        const id = await insertProject(db, name);
+        await setActiveProjectId(db, id);
+        setActiveId(id);
+      } else {
+        await renameProject(db, current.project.id, name);
+      }
+      await loadProjects();
+    } catch (e) {
+      Alert.alert('Could not save the project', String(e));
+    }
+  }
+
+  function handleProjectLongPress(project: Project) {
+    Alert.alert(project.name, undefined, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Rename', onPress: () => setNaming({ mode: 'rename', project }) },
+      { text: 'Delete', style: 'destructive', onPress: () => confirmDeleteProject(project) },
+    ]);
+  }
+
+  function confirmDeleteProject(project: Project) {
+    if (projects.length <= 1) {
+      Alert.alert('Keep one project', 'A task has to live somewhere, so the last project stays.');
+      return;
+    }
+    Alert.alert(
+      `Delete "${project.name}"?`,
+      'Its tasks and their reminders are deleted too. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Each task goes through the reminder path, never straight out of
+              // SQLite: a row deleted behind the alarm's back leaves an OS
+              // alarm that nothing owns and nothing can cancel.
+              for (const id of await listTodoIdsInProject(db, project.id)) {
+                await deleteTaskAndReminder(db, id);
+              }
+              await deleteProject(db, project.id);
+              const remaining = await listProjects(db);
+              const next = remaining[0];
+              if (next) {
+                await setActiveProjectId(db, next.id);
+                setActiveId(next.id);
+              }
+              await loadProjects();
+            } catch (e) {
+              Alert.alert('Could not delete the project', String(e));
+            } finally {
+              await reload().catch(() => {});
+            }
+          },
+        },
+      ],
+    );
+  }
+
+  async function handleSelectProject(id: number) {
+    setActiveId(id);
+    try {
+      await setActiveProjectId(db, id);
+    } catch {
+      // Remembering the choice is a convenience; failing to store it must not
+      // stop the user from switching.
     }
   }
 
@@ -158,6 +342,14 @@ export function TodoScreen() {
         Tasks
       </Text>
 
+      <ProjectBar
+        projects={projects}
+        activeId={activeId}
+        onSelect={(id) => void handleSelectProject(id)}
+        onAdd={() => setNaming({ mode: 'add' })}
+        onLongPress={handleProjectLongPress}
+      />
+
       {caps ? <ReminderBanner caps={caps} onChanged={refresh} /> : null}
 
       <FlatList
@@ -166,16 +358,16 @@ export function TodoScreen() {
         renderItem={({ item }) => (
           <TodoItem
             todo={item}
-            onToggle={handleToggle}
-            onEdit={(todo) => {
-              setEditing(todo);
-              setEditorOpen(true);
-            }}
+            onAction={handleAction}
+            attachmentCount={counts.get(item.id) ?? 0}
+            onEdit={(todo) => void openEditor(todo)}
             onDelete={handleDelete}
           />
         )}
         ListEmptyComponent={
-          <Text style={[styles.empty, { color: t.textMuted }]}>No tasks yet. Add one below.</Text>
+          <Text style={[styles.empty, { color: t.textMuted }]}>
+            No tasks in this project yet. Add one below.
+          </Text>
         }
         contentContainerStyle={{ paddingBottom: 16 }}
         style={{ flex: 1 }}
@@ -186,9 +378,8 @@ export function TodoScreen() {
           label="Add task"
           primary
           onPress={() => {
-            setEditing(null);
             insertedIdRef.current = null;
-            setEditorOpen(true);
+            void openEditor(null);
           }}
         />
       </View>
@@ -196,12 +387,22 @@ export function TodoScreen() {
       <TodoEditor
         visible={editorOpen}
         todo={editing}
+        attachments={editingFiles}
         onCancel={() => {
           insertedIdRef.current = null;
           setEditorOpen(false);
           setEditing(null);
         }}
         onSave={handleSave}
+      />
+
+      <NameDialog
+        visible={naming !== null}
+        title={naming?.mode === 'rename' ? 'Rename project' : 'New project'}
+        initial={naming?.mode === 'rename' ? naming.project.name : ''}
+        confirmLabel={naming?.mode === 'rename' ? 'Rename' : 'Create'}
+        onCancel={() => setNaming(null)}
+        onConfirm={(name) => void handleProjectName(name)}
       />
     </View>
   );

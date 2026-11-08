@@ -43,7 +43,75 @@ const MIGRATIONS: readonly string[] = [
      value TEXT NOT NULL
    );
    ALTER TABLE todos ADD COLUMN reminder_missed INTEGER NOT NULL DEFAULT 0;`,
+
+  // v4: a task is not just "done or not". Work on it STARTS before it ends,
+  // and most tasks carry a note that does not belong in the one-line title.
+  //  - description: TEXT NOT NULL DEFAULT '' so every existing row is valid
+  //    immediately; SQLite will not let ADD COLUMN be NOT NULL without a
+  //    constant default.
+  //  - started_at / done_at are nullable ON PURPOSE. Rows that were completed
+  //    before this version exist, and there is no honest value to backfill:
+  //    nobody recorded when they were finished. A migration must not invent
+  //    data, so the UI has to cope with "done, time unknown".
+  `ALTER TABLE todos ADD COLUMN description TEXT    NOT NULL DEFAULT '';
+   ALTER TABLE todos ADD COLUMN in_progress INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE todos ADD COLUMN started_at  INTEGER;
+   ALTER TABLE todos ADD COLUMN done_at     INTEGER;`,
+
+  // v5: projects. Every task belongs to exactly one.
+  //
+  // The order of these four statements is forced by SQLite, and the reasons are
+  // worth knowing:
+  //  - The default project must EXIST before the column that defaults to it,
+  //    or the first foreign-key check would fail against an empty table.
+  //  - `created_at` cannot come from JavaScript: a migration is a fixed string
+  //    and `execAsync` binds no parameters. SQLite computes it itself.
+  //  - ADD COLUMN may be NOT NULL only with a CONSTANT default, which is why
+  //    the default project has the hard-coded id 1 rather than a generated one.
+  //  - ADD COLUMN with REFERENCES is only legal while foreign-key enforcement
+  //    is OFF. That is why the PRAGMA below is switched on AFTER migrations,
+  //    not before them. A future migration adding another REFERENCES column
+  //    depends on that order, so do not move it.
+  `CREATE TABLE projects (
+     id         INTEGER PRIMARY KEY NOT NULL,
+     name       TEXT    NOT NULL,
+     created_at INTEGER NOT NULL
+   );
+   INSERT INTO projects (id, name, created_at)
+     VALUES (1, 'Tasks', CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+   ALTER TABLE todos ADD COLUMN project_id INTEGER NOT NULL DEFAULT 1
+     REFERENCES projects (id);
+   CREATE INDEX idx_todos_project ON todos (project_id, done, due_at);`,
+
+  // v6: up to three files per task.
+  //
+  // Only the METADATA lives here. The bytes are copied into the app's own
+  // storage (see `src/files/attachmentStore.ts`) rather than referenced by the
+  // content:// URI the picker hands over: that URI is a grant, and the grant
+  // dies when the app restarts, when the user clears the other app's data, or
+  // when the file is moved. A todo list that forgets its attachments overnight
+  // is worse than one that never had them.
+  //
+  // `stored_as` is a name this app generates. The picked file's own name is
+  // kept only in `name`, for display, and is never used as a path component —
+  // it is untrusted text that can contain '/' and '..'.
+  //
+  // The foreign key is the same guard as on projects: deleting a task that
+  // still has attachment rows fails loudly rather than orphaning files that
+  // nothing would ever clean up.
+  `CREATE TABLE attachments (
+     id         INTEGER PRIMARY KEY NOT NULL,
+     todo_id    INTEGER NOT NULL REFERENCES todos (id),
+     name       TEXT    NOT NULL,
+     size       INTEGER NOT NULL,
+     stored_as  TEXT    NOT NULL,
+     created_at INTEGER NOT NULL
+   );
+   CREATE INDEX idx_attachments_todo ON attachments (todo_id);`,
 ];
+
+/** The project every pre-v5 task was moved into; it can be renamed but not deleted. */
+export const DEFAULT_PROJECT_ID = 1;
 
 /** Passed to <SQLiteProvider onInit>. Runs once per app start, before any screen renders. If it throws, DatabaseErrorBoundary (App.tsx) shows the message. */
 export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
@@ -69,4 +137,11 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
       await txn.execAsync(`PRAGMA user_version = ${version + 1};`);
     });
   }
+
+  // AFTER the migrations, never before: see the note on v5. SQLite defaults
+  // foreign keys to OFF and the setting is per CONNECTION, not stored in the
+  // file, so it has to be set on every start. With it on, deleting a project
+  // that still owns tasks fails loudly instead of leaving orphan rows whose
+  // reminders nothing would ever cancel.
+  await db.execAsync('PRAGMA foreign_keys = ON;');
 }
