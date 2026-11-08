@@ -1,0 +1,32 @@
+{
+  "name": "learning-todo",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@react-native-community/datetimepicker": "9.2.1",
+    "expo": "~58.0.23",
+    "expo-build-properties": "~58.0.12",
+    "expo-dev-client": "~58.0.18",
+    "expo-notifications": "~58.1.8",
+    "expo-sqlite": "~58.0.15",
+    "expo-status-bar": "~58.0.4",
+    "expo-system-ui": "~58.0.7",
+    "react": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-safe-area-context": "~5.11.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/react": "~19.3.0",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/notifications/*.test.ts",
+    "doctor": "expo-doctor",
+    "prebuild": "expo prebuild --platform android --no-install"
+  },
+  "private": true
+}

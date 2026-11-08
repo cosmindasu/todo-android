@@ -1,0 +1,9 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    // Lets the pure-logic tests import './x.ts' (needed for `node --test`).
+    "allowImportingTsExtensions": true,
+    "types": ["node"]
+  }
+}
