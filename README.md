@@ -92,7 +92,7 @@ had nothing honest to put there, and the UI says "done" without a time.
 Requires Node 20+ (tested with Node 22, npm 10).
 
 ```bash
-cd "/Users/cosmin/work other/Cosmin/15. aplicatie mobila android - todo"
+cd todo-android          # wherever you cloned it
 npm install
 npm run typecheck      # tsc --noEmit, should print nothing
 npm run doctor         # expo-doctor, should say 20/20 checks passed
