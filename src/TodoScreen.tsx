@@ -109,12 +109,10 @@ export function TodoScreen() {
       let seq = Date.now();
       for (const picked of plan.add) {
         const storedAs = storedFileName(seq++, picked.name);
-        await storeAttachment(picked.uri, storedAs);
-        await insertAttachment(db, todoId, {
-          name: picked.name,
-          size: picked.size,
-          storedAs,
-        });
+        // The size that goes in the row is the number of bytes actually
+        // written, never the picker's claim about them.
+        const size = await storeAttachment(picked.uri, storedAs);
+        await insertAttachment(db, todoId, { name: picked.name, size, storedAs });
       }
     },
     [db],

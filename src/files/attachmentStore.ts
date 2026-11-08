@@ -15,6 +15,8 @@
  */
 import { Directory, File, Paths } from 'expo-file-system';
 
+import { formatSize, MAX_ATTACHMENT_BYTES } from '../db/attachmentLimit';
+
 const DIR_NAME = 'attachments';
 
 function dir(): Directory {
@@ -27,12 +29,31 @@ export function attachmentFile(storedAs: string): File {
   return new File(dir(), storedAs);
 }
 
-/** Copy a picked file in under a name this app generated. */
-export async function storeAttachment(sourceUri: string, storedAs: string): Promise<void> {
+/**
+ * Copy a picked file in under a name this app generated, and report how many
+ * bytes were actually written.
+ *
+ * The caller must store THAT number, not the size the picker reported. The
+ * picker's size comes from a DocumentsProvider and can be stale: measured
+ * here, a file the picker called 25459 bytes was 11359 bytes when it was read
+ * a few seconds later, and a row showing the picker's figure would have been
+ * wrong forever.
+ *
+ * For the same reason the ceiling is re-checked here. The check at pick time
+ * is a cheap gate on a number that may be a lie; this one is on the bytes in
+ * hand, and it is the one that binds.
+ */
+export async function storeAttachment(sourceUri: string, storedAs: string): Promise<number> {
   const bytes = await new File(sourceUri).bytes();
+  if (bytes.length > MAX_ATTACHMENT_BYTES) {
+    throw new Error(
+      `That file is ${formatSize(bytes.length)}, over the ${formatSize(MAX_ATTACHMENT_BYTES)} limit for an attachment.`,
+    );
+  }
   const target = attachmentFile(storedAs);
   target.create({ overwrite: true, intermediates: true });
   await target.write(bytes);
+  return bytes.length;
 }
 
 /** Delete stored bytes. A file that is already gone is not an error. */
