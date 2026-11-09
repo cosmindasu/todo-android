@@ -2,7 +2,35 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 
-import { DEFAULT_PROJECT_ID, MIGRATIONS } from './database.ts';
+import { DEFAULT_PROJECT_ID, MIGRATIONS, migrateDbIfNeeded } from './database.ts';
+
+/**
+ * The three methods `migrateDbIfNeeded` actually uses, over `node:sqlite`.
+ *
+ * The point is to run the SHIPPED function rather than a copy of its loop. The
+ * first version of this file re-implemented the loop, which left the version
+ * guard, the loop bounds, the transaction wrapping and the placement of
+ * `PRAGMA foreign_keys = ON` untested — change `<` to `<=`, or bump the
+ * version before running the migration instead of after, and the suite stayed
+ * green. An audit pointed that out.
+ */
+function shim(db: DatabaseSync): any {
+  const self: any = {
+    execAsync: async (sql: string) => { db.exec(sql); },
+    getFirstAsync: async (sql: string) => db.prepare(sql).get(),
+    withExclusiveTransactionAsync: async (task: (txn: any) => Promise<void>) => {
+      db.exec('BEGIN EXCLUSIVE');
+      try {
+        await task(self);
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+    },
+  };
+  return self;
+}
 
 /**
  * Runs the real migration strings against a real SQLite engine, the way
@@ -12,25 +40,70 @@ import { DEFAULT_PROJECT_ID, MIGRATIONS } from './database.ts';
  * `node:sqlite` is built into Node, so this needs no dependency and runs in CI
  * beside the pure tests.
  */
-function migrateFrom(startVersion: number, seed?: (db: DatabaseSync) => void): DatabaseSync {
+async function migrateFrom(
+  startVersion: number,
+  seed?: (db: DatabaseSync) => void,
+): Promise<DatabaseSync> {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys = OFF');
   for (let v = 0; v < startVersion; v++) db.exec(MIGRATIONS[v]!);
   db.exec(`PRAGMA user_version = ${startVersion}`);
   seed?.(db);
-  for (let v = startVersion; v < MIGRATIONS.length; v++) {
-    db.exec(MIGRATIONS[v]!);
-    db.exec(`PRAGMA user_version = ${v + 1}`);
-  }
-  db.exec('PRAGMA foreign_keys = ON');
+  await migrateDbIfNeeded(shim(db)); // the real runner, not a copy of its loop
   return db;
+}
+
+/**
+ * A row as a real user would have it: every column carrying a value that is
+ * NOT its default, so a migration that drops the column is visible.
+ *
+ * The first version of this test seeded three columns and asserted seven, so a
+ * table rebuild that "forgot" `done`, `remind`, `notification_id` and
+ * `reminder_missed` passed all six tests while silently reopening every
+ * completed task, discarding every reminder opt-in and stranding every OS
+ * alarm. A table rebuild is not exotic: it is how SQLite drops a column or
+ * changes its type, so it is the most likely shape of a future migration.
+ */
+function seedRealisticRow(db: DatabaseSync, version: number): void {
+  db.exec(
+    "INSERT INTO todos (title, due_at, created_at, done) VALUES ('pay the rent', 1700000000000, 1690000000000, 1)",
+  );
+  if (version >= 2) {
+    db.exec("UPDATE todos SET remind = 1, notification_id = 'alarm-abc'");
+  }
+  if (version >= 3) db.exec('UPDATE todos SET reminder_missed = 1');
+}
+
+/** Every column that existed at `version`, with the value seedRealisticRow set. */
+function assertRowSurvived(db: DatabaseSync, version: number, label: string): void {
+  const row = db.prepare('SELECT * FROM todos').get() as any;
+  assert.equal(row.title, 'pay the rent', `${label}: title`);
+  assert.equal(row.due_at, 1700000000000, `${label}: due_at`);
+  assert.equal(row.created_at, 1690000000000, `${label}: created_at`);
+  assert.equal(row.done, 1, `${label}: done — a completed task must not reopen`);
+  if (version >= 2) {
+    assert.equal(row.remind, 1, `${label}: remind — the opt-in must survive`);
+    assert.equal(
+      row.notification_id,
+      'alarm-abc',
+      `${label}: notification_id — losing it strands the OS alarm forever`,
+    );
+  }
+  if (version >= 3) assert.equal(row.reminder_missed, 1, `${label}: reminder_missed`);
+  // Added later, so they must be at their documented defaults.
+  assert.equal(row.project_id, DEFAULT_PROJECT_ID, `${label}: moved into the default project`);
+  assert.equal(row.description, '', `${label}: new text column defaulted`);
+  assert.equal(row.in_progress, 0, `${label}: new flag defaulted`);
+  // Nothing invented: a task completed before v4 has no honest completion time.
+  assert.equal(row.started_at, null, `${label}: started_at`);
+  assert.equal(row.done_at, null, `${label}: done_at`);
 }
 
 const version = (db: DatabaseSync) =>
   (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
 
-test('a fresh install reaches the current schema with a default project', () => {
-  const db = migrateFrom(0);
+test('a fresh install reaches the current schema with a default project', async () => {
+  const db = await migrateFrom(0);
   assert.equal(version(db), MIGRATIONS.length);
   // node:sqlite returns null-prototype rows, so spread before comparing.
   const projects = db.prepare('SELECT id, name FROM projects').all().map((r) => ({ ...r }));
@@ -38,42 +111,28 @@ test('a fresh install reaches the current schema with a default project', () => 
   assert.equal((db.prepare('SELECT COUNT(*) AS n FROM todos').get() as any).n, 0);
 });
 
-test('every older install upgrades, from every version that ever shipped', () => {
+test('every older install upgrades with every column intact', async () => {
   // The case that cannot be fixed later: someone who installed an early build
   // and opens the app months on. v1 predates reminders entirely.
   for (let from = 1; from < MIGRATIONS.length; from++) {
-    const db = migrateFrom(from, (d) => {
-      d.exec(
-        "INSERT INTO todos (title, due_at, created_at) VALUES ('old task', 1700000000000, 1690000000000)",
-      );
-    });
+    const db = await migrateFrom(from, (d) => seedRealisticRow(d, from));
     assert.equal(version(db), MIGRATIONS.length, `from v${from}`);
-    const row = db.prepare('SELECT * FROM todos').get() as any;
-    assert.equal(row.title, 'old task', `from v${from}: the title survived`);
-    assert.equal(row.due_at, 1700000000000, `from v${from}: the due date survived`);
-    assert.equal(row.project_id, DEFAULT_PROJECT_ID, `from v${from}: moved into the default project`);
-    assert.equal(row.description, '', `from v${from}: new text column defaulted`);
-    assert.equal(row.in_progress, 0, `from v${from}: new flag defaulted`);
-    // Nothing invented: a task completed before v4 has no honest completion time.
-    assert.equal(row.started_at, null, `from v${from}`);
-    assert.equal(row.done_at, null, `from v${from}`);
+    assertRowSurvived(db, from, `from v${from}`);
   }
 });
 
-test('no migration path leaves a dangling foreign key', () => {
+test('no migration path leaves a dangling foreign key', async () => {
   for (let from = 0; from < MIGRATIONS.length; from++) {
-    const db = migrateFrom(from, from >= 1 ? (d) => {
-      d.exec("INSERT INTO todos (title, created_at) VALUES ('t', 1)");
-    } : undefined);
+    const db = await migrateFrom(from, from >= 1 ? (d) => seedRealisticRow(d, from) : undefined);
     const violations = db.prepare('PRAGMA foreign_key_check').all();
     assert.deepEqual(violations, [], `from v${from}`);
   }
 });
 
-test('the foreign key is enforced once the migrations are done', () => {
+test('the foreign key is enforced once the migrations are done', async () => {
   // The guard the delete paths rely on: a project that still owns tasks, or a
   // task that still owns files, cannot be deleted out from under them.
-  const db = migrateFrom(0);
+  const db = await migrateFrom(0);
   db.exec("INSERT INTO todos (title, created_at, project_id) VALUES ('t', 1, 1)");
   assert.throws(() => db.exec('DELETE FROM projects WHERE id = 1'), /FOREIGN KEY/i);
   const id = (db.prepare('SELECT id FROM todos').get() as any).id;

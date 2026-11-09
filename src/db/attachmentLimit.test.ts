@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   acceptAttachments,
+  firstFreeName,
   formatSize,
   storedFileName,
   tooLargeMessage,
@@ -123,4 +124,31 @@ test('an unknown size is not treated as too large', () => {
   // perfectly ordinary files.
   assert.equal(tooLargeMessage('a.pdf', null), null);
   assert.equal(tooLargeMessage('a.pdf', Number.NaN), null);
+});
+
+test('a name already in the store is never handed out again', () => {
+  // The defect this closes: names came from Date.now() and were trusted to be
+  // unique. Two saves a few milliseconds apart produced the same name, the
+  // write overwrote, and one task's bytes replaced another's — after which
+  // deleting either task left the other pointing at nothing.
+  const taken = new Set(['100.pdf', '101.pdf', '102.pdf']);
+  assert.equal(firstFreeName(100, 'a.pdf', (n) => taken.has(n)), '103.pdf');
+  assert.equal(firstFreeName(100, 'a.png', (n) => taken.has(n)), '100.png', 'a different extension does not collide');
+  assert.equal(firstFreeName(104, 'a.pdf', (n) => taken.has(n)), '104.pdf', 'past the run, the first try wins');
+});
+
+test('it gives up rather than looping forever when everything is taken', () => {
+  assert.throws(() => firstFreeName(0, 'a.pdf', () => true, 50), /free name/);
+});
+
+test('the name it hands out is still a safe one', () => {
+  // Whatever the loop does, the result must still satisfy storedFileName's
+  // contract: no path component can come from the user's filename.
+  const taken = new Set<string>();
+  for (let i = 0; i < 5; i++) {
+    const n = firstFreeName(7, '../../etc/passwd.sh', (x) => taken.has(x));
+    assert.match(n, /^\d+(\.[a-z0-9]{1,10})?$/, n);
+    taken.add(n);
+  }
+  assert.equal(taken.size, 5, 'five distinct names');
 });

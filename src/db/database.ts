@@ -122,7 +122,12 @@ export const MIGRATIONS: readonly string[] = [
    CREATE INDEX idx_attachments_todo ON attachments (todo_id);`,
 ];
 
-/** The project every pre-v5 task was moved into; it can be renamed but not deleted. */
+/**
+ * The project every pre-v5 task was moved into. It can be renamed, and it can
+ * also be deleted once a second project exists — only the LAST project is
+ * protected (`confirmDeleteProject`). `chooseActiveProject` falls through to
+ * whatever remains, which `activeProject.test.ts` covers.
+ */
 export const DEFAULT_PROJECT_ID = 1;
 
 /** Passed to <SQLiteProvider onInit>. Runs once per app start, before any screen renders. If it throws, DatabaseErrorBoundary (App.tsx) shows the message. */

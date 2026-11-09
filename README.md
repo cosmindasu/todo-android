@@ -33,7 +33,7 @@ look:
 
 The pure logic — the reminder reconcile plan, the per-task lock, the task state
 machine, the attachment rules — is tested with `node --test` and no framework:
-35 tests, under a second, run on every push.
+41 tests, under a second, run on every push.
 
 Stack: Expo SDK 58, React Native 0.88, React 19, TypeScript (strict),
 `expo-sqlite`, `expo-notifications`, `@react-native-community/datetimepicker`,
@@ -45,7 +45,7 @@ Stack: Expo SDK 58, React Native 0.88, React 19, TypeScript (strict),
 | File | What it teaches |
 | --- | --- |
 | `src/notifications/reminders.ts` | Channel, POST_NOTIFICATIONS, SCHEDULE_EXACT_ALARM: why each exists, what breaks without it |
-| `src/db/database.ts` | Migration runner using `PRAGMA user_version`, and six real migrations — including the three SQLite rules that dictate the order of v5 |
+| `src/db/database.ts` | Migration runner using `PRAGMA user_version`, and six real migrations — including the SQLite rules behind the order of v5, and the one that turned out not to be a rule |
 | `src/db/taskState.ts` | The three task states as pure data, with the invariants as tests |
 | `src/db/attachmentLimit.ts` | Why a picked file's own name must never become a path |
 | `src/files/attachmentStore.ts` | Why the bytes are copied instead of keeping the `content://` URI |
@@ -98,16 +98,23 @@ Three decisions worth the words:
 
 ### What v5 teaches about SQLite
 
-The projects migration is four statements and the order of all four is forced:
+The projects migration is four statements and three of them are forced:
 
 - the default project must EXIST before a column that defaults to it;
 - `created_at` cannot come from JavaScript, because a migration is a fixed
   string with no bound parameters — SQLite computes it with `strftime`;
 - `ADD COLUMN` may be `NOT NULL` only with a *constant* default, which is why
-  the default project has the hard-coded id 1;
-- `ADD COLUMN ... REFERENCES` is only legal while foreign-key enforcement is
-  OFF, which is why `PRAGMA foreign_keys = ON` runs *after* the migrations and
-  not before them.
+  the default project has the hard-coded id 1.
+
+A fourth rule used to be listed here: that `ADD COLUMN ... REFERENCES` is only
+legal while foreign-key enforcement is off, and that `PRAGMA foreign_keys = ON`
+therefore had to run after the migrations. **Measured, that is false** — on
+SQLite 3.51.2 the whole chain runs identically either way, with no violations,
+and `database.test.ts` asserts it. The pragma still runs afterwards, because a
+future migration that adds a column and then backfills it would be checked
+mid-flight otherwise, but that is prudence rather than a requirement. It is
+left in the record because a confident mechanism written into a teaching
+project and then disproved by its own test is worth more than a tidy list.
 
 Verified by upgrading a real v3 database on a device rather than a fresh
 install: two existing tasks kept their titles, due dates and reminder state,
@@ -214,7 +221,7 @@ Notes:
 
 ## Android 16 / API 36
 
-`app.json` sets `targetSdkVersion: 36` through `expo-build-properties`
+`app.config.ts` sets `targetSdkVersion: 36` through `expo-build-properties`
 (Expo SDK 58 already defaults to 36; it is pinned explicitly so it is visible
 and cannot silently change). Verified in a generated `android/gradle.properties`
 (`android.targetSdkVersion=36`). Consequences you will feel: edge-to-edge is
@@ -244,7 +251,7 @@ and its transitive dependencies:
 | `RECEIVE_BOOT_COMPLETED` | `expo-notifications`, to re-arm alarms after a reboot |
 | `WAKE_LOCK`, `com.google.android.c2dm.permission.RECEIVE` | Firebase Cloud Messaging, which `expo-notifications` links in even though this app sends no remote push |
 | `com.android.installreferrer...BIND_GET_INSTALL_REFERRER_SERVICE` | the Play Install Referrer library, pulled in the same way |
-| 15 OEM badge permissions (`com.sec...`, `com.huawei...`, `com.oppo...`, `me.everything...`, `READ_APP_BADGE`, ...) | `me.leolin:ShortcutBadger:1.1.22`, an explicit dependency in `expo-notifications/android/build.gradle`, so unread-count badges work on OEM launchers |
+| 16 OEM badge permissions (`com.sec...`, `com.huawei...`, `com.oppo...`, `me.everything...`, `READ_APP_BADGE`, ...) | `me.leolin:ShortcutBadger:1.1.22`, an explicit dependency in `expo-notifications/android/build.gradle`, so unread-count badges work on OEM launchers |
 | `...DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` | `androidx.core`; a self-scoped permission that guards the app's own runtime receivers |
 
 Worth noticing: the app asks to receive Firebase messages while having no

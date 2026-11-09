@@ -78,10 +78,15 @@ export async function deleteAttachment(db: SQLiteDatabase, id: number): Promise<
 /**
  * Remove every attachment row of a task and report the files to delete.
  *
- * The rows go first and the bytes after, on purpose. The other order can leave
- * a row pointing at a file that no longer exists — a broken attachment the UI
- * has to explain — whereas this order can at worst leave a file nothing
- * references, which costs space and nothing else.
+ * The rows go first and the bytes after, on purpose: the other order can leave
+ * a row pointing at a file that no longer exists.
+ *
+ * This used to claim the worst case here was wasted space. That was too
+ * strong, and an audit showed two ways past it — two tasks sharing a stored
+ * name, and a process killed between the row deletes. Both are closed now
+ * (`reserveStoredName`, and the transaction in `deleteTaskAndReminder`), so
+ * the claim holds again — but only because of those, not because of the
+ * ordering alone.
  */
 export async function takeAttachmentsOf(db: SQLiteDatabase, todoId: number): Promise<string[]> {
   const rows = await db.getAllAsync<{ stored_as: string }>(

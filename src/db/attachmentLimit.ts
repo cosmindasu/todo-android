@@ -95,3 +95,25 @@ export function formatSize(bytes: number): string {
   }
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`;
 }
+
+/**
+ * The first name in the sequence that `isTaken` does not claim.
+ *
+ * Split out from the filesystem so the collision rule can be tested. Names used
+ * to come straight from `Date.now()` and were trusted to be unique; two saves a
+ * few milliseconds apart, or a clock stepping backwards, produced the same name
+ * and one task's bytes silently replaced another's. Asking rather than assuming
+ * is a guarantee instead of a probability.
+ */
+export function firstFreeName(
+  seq: number,
+  originalName: string,
+  isTaken: (name: string) => boolean,
+  limit = 10000,
+): string {
+  for (let n = seq; n < seq + limit; n++) {
+    const name = storedFileName(n, originalName);
+    if (!isTaken(name)) return name;
+  }
+  throw new Error('Could not find a free name for the attachment.');
+}

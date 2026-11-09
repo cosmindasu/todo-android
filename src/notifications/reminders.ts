@@ -227,15 +227,28 @@ async function cancelLocked(db: SQLiteDatabase, todoId: number): Promise<void> {
  *
  * Attachments are part of "everything": the foreign key on `attachments`
  * refuses to let a task with files be deleted, which is the point — it makes
- * forgetting them impossible rather than merely unlikely. The rows go first
- * and the bytes after, so a failure cannot leave a row pointing at a file that
- * is no longer there.
+ * forgetting them impossible rather than merely unlikely.
+ *
+ * The two row deletes are ONE TRANSACTION, and that is not decoration. They
+ * used to be separate autocommit statements, so a process killed between them
+ * — OOM, a swipe away, a crash — left the task alive with its attachment rows
+ * already gone. The startup sweep then deleted those files, correctly by its
+ * own rules, because nothing pointed at them any more: a surviving task whose
+ * attachments had been destroyed. An audit found that window; the comment here
+ * used to claim the worst case was wasted space.
+ *
+ * The bytes go after the transaction commits, so the remaining failure leaves
+ * a file nothing references — which the sweep cleans up and which costs
+ * nothing but space.
  */
 export function deleteTaskAndReminder(db: SQLiteDatabase, todoId: number): Promise<void> {
   return withTaskLock(lockKey(todoId), async () => {
     await cancelLocked(db, todoId); // before the row (and its notification_id) is gone
-    const files = await takeAttachmentsOf(db, todoId);
-    await deleteTodo(db, todoId);
+    let files: string[] = [];
+    await db.withExclusiveTransactionAsync(async (txn) => {
+      files = await takeAttachmentsOf(txn, todoId);
+      await deleteTodo(txn, todoId);
+    });
     for (const storedAs of files) deleteStored(storedAs);
   });
 }

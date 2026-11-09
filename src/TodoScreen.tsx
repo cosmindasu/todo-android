@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button, TodoEditor } from './components/TodoEditor';
 import { NameDialog, ProjectBar } from './components/ProjectBar';
-import type { AttachmentPlan } from './components/TodoEditor';
+import type { AttachmentPlan, PickedFile } from './components/TodoEditor';
 import { ReminderBanner } from './components/ReminderBanner';
 import { TodoItem } from './components/TodoItem';
 import {
@@ -26,8 +26,8 @@ import {
   listAttachments,
   type Attachment,
 } from './db/attachments';
-import { storedFileName } from './db/attachmentLimit';
-import { deleteStored, storeAttachment, sweepStrays } from './files/attachmentStore';
+import { acceptAttachments } from './db/attachmentLimit';
+import { deleteStored, reserveStoredName, storeAttachment, sweepStrays } from './files/attachmentStore';
 import { applyTaskAction, type TaskAction } from './db/taskState';
 import {
   insertTodo,
@@ -64,6 +64,11 @@ export function TodoScreen() {
   );
   const [counts, setCounts] = useState<Map<number, number>>(new Map());
   const [editingFiles, setEditingFiles] = useState<Attachment[]>([]);
+  // Which of the editor's picked files are already committed. A save that
+  // fails part way leaves the editor open with the SAME plan, and without this
+  // a retry re-stored everything that had already succeeded — one more copy of
+  // each file per attempt, past the limit the UI was still showing.
+  const appliedFiles = useRef(new Set<PickedFile>());
 
   const loadProjects = useCallback(async () => {
     const [list, active] = await Promise.all([listProjects(db), getActiveProjectId(db)]);
@@ -87,6 +92,7 @@ export function TodoScreen() {
     async (todo: Todo | null) => {
       setEditing(todo);
       setEditingFiles(todo ? await listAttachments(db, todo.id).catch(() => []) : []);
+      appliedFiles.current = new Set();
       setEditorOpen(true);
     },
     [db],
@@ -106,13 +112,24 @@ export function TodoScreen() {
         const storedAs = await deleteAttachment(db, id);
         if (storedAs) deleteStored(storedAs);
       }
-      let seq = Date.now();
       for (const picked of plan.add) {
-        const storedAs = storedFileName(seq++, picked.name);
+        if (appliedFiles.current.has(picked)) continue; // a retry: already stored
+        // The limit is re-checked HERE, against the database, not against the
+        // editor's snapshot. The editor counts what it was handed when it
+        // opened, and the failure path deliberately does not refresh it, so on
+        // a retry its counter is stale by exactly the files that did land.
+        const already = (await listAttachments(db, todoId)).length;
+        if (acceptAttachments(already, 1).accepted === 0) {
+          throw new Error(
+            `This task already has ${already} files, which is the limit. Remove one and save again.`,
+          );
+        }
+        const storedAs = reserveStoredName(Date.now(), picked.name);
         // The size that goes in the row is the number of bytes actually
         // written, never the picker's claim about them.
         const size = await storeAttachment(picked.uri, storedAs);
         await insertAttachment(db, todoId, { name: picked.name, size, storedAs });
+        appliedFiles.current.add(picked);
       }
     },
     [db],
@@ -215,6 +232,7 @@ export function TodoScreen() {
         );
       }
       insertedIdRef.current = null;
+      appliedFiles.current = new Set();
       setEditorOpen(false);
       setEditing(null);
       await reload();
