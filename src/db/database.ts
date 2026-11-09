@@ -15,7 +15,13 @@ export const DATABASE_NAME = 'todos.db';
  *  - Old data must survive: new columns need defaults (SQLite ALTER TABLE can
  *    only ADD COLUMN, it cannot change/drop most things cheaply).
  */
-const MIGRATIONS: readonly string[] = [
+/**
+ * Exported so the migration chain can be executed against a real SQLite engine
+ * in `database.test.ts`. This is the only code in the app that touches a user's
+ * existing data irreversibly, and it used to be the only code with no test at
+ * all — a mistake in here cannot be fixed by shipping an update.
+ */
+export const MIGRATIONS: readonly string[] = [
   // v1: the original table.
   `CREATE TABLE todos (
      id         INTEGER PRIMARY KEY NOT NULL,
@@ -68,10 +74,16 @@ const MIGRATIONS: readonly string[] = [
   //    and `execAsync` binds no parameters. SQLite computes it itself.
   //  - ADD COLUMN may be NOT NULL only with a CONSTANT default, which is why
   //    the default project has the hard-coded id 1 rather than a generated one.
-  //  - ADD COLUMN with REFERENCES is only legal while foreign-key enforcement
-  //    is OFF. That is why the PRAGMA below is switched on AFTER migrations,
-  //    not before them. A future migration adding another REFERENCES column
-  //    depends on that order, so do not move it.
+  //
+  // An earlier version of this comment also claimed that ADD COLUMN with
+  // REFERENCES is only legal while foreign-key enforcement is OFF, and that
+  // the PRAGMA below therefore had to run after the migrations. MEASURED, THAT
+  // IS NOT TRUE: on SQLite 3.51.2 the whole chain runs identically with
+  // enforcement on or off, with no violations either way (database.test.ts
+  // asserts it). The pragma still runs afterwards, because a future migration
+  // that adds a column and then backfills it would be checked mid-flight
+  // otherwise — but that is prudence, not a requirement, and the test will say
+  // so if a later SQLite starts refusing it.
   `CREATE TABLE projects (
      id         INTEGER PRIMARY KEY NOT NULL,
      name       TEXT    NOT NULL,
@@ -138,7 +150,9 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase): Promise<void> {
     });
   }
 
-  // AFTER the migrations, never before: see the note on v5. SQLite defaults
+  // After the migrations rather than before: see the note on v5 — prudence
+  // for a future backfilling migration, not the hard requirement that comment
+  // used to claim. SQLite defaults
   // foreign keys to OFF and the setting is per CONNECTION, not stored in the
   // file, so it has to be set on every start. With it on, deleting a project
   // that still owns tasks fails loudly instead of leaving orphan rows whose
