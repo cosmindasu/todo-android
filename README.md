@@ -368,6 +368,54 @@ a theory before it got written down — that MIUI strips alarms when it kills a
 swiped-away app. Plausible, never demonstrated, and no longer needed to explain
 anything.
 
+### Two gates stand between a reboot and a reminder, and the app can see neither
+
+With MIUI's per-app **Autostart** granted, expo's boot receiver does exactly
+what its documentation claims — and the app is never opened:
+
+    16:58:04 Boost: hostingType=broadcast,
+      hostingName={ro.dbg.learningtodo/expo...NotificationsService},
+      callerPackage=null, isSystem=true
+    16:58:04 ActivityManager: Start proc 8016:ro.dbg.learningtodo
+      for broadcast {...NotificationsService} caller=null
+
+`caller=null` and `isSystem=true`: the SYSTEM started the app for
+`BOOT_COMPLETED`, and the `BroadcastQueueInjector` refusal that appeared at
+every earlier reboot is absent. The alarm was re-armed (`RTC_WAKEUP`,
+`window=0`), fired at 17:00:00, and the notification was posted.
+
+So gate one is the OEM's, and granting it fixes the reboot case properly.
+
+**Gate two is Android's own, and it is the harsher of the pair.** The same run
+produced nothing at all for a minute and a half, with not even a refusal in the
+log, because the phone had not been unlocked since booting:
+
+    UserInfo{0:null:13}  State: RUNNING_LOCKED
+
+Under file-based encryption a device sits in `RUNNING_LOCKED` until the first
+unlock. `BOOT_COMPLETED` is not delivered to ordinary apps in that state — only
+`LOCKED_BOOT_COMPLETED`, and only to direct-boot-aware components, which expo's
+is not. Unlocking flipped it to `RUNNING_UNLOCKED` and the broadcast followed
+about twenty seconds later.
+
+Nothing can be done about that second gate, by us or by expo. Before the first
+unlock the app's own credential-encrypted storage — the SQLite file holding the
+tasks — is not readable, so there is no version of this app that could re-arm
+anything. **A phone that reboots at 3am and is unlocked at 8am loses every
+reminder due in between**, autostart or no autostart.
+
+What the app CAN do is the third path, and it is the one that works with both
+gates shut: when it is next opened, rebuild every alarm from the database and
+flag anything whose time passed while no alarm was alive. That is
+`shouldForceResync` plus the `missed` flag, and between them they turn a silent
+loss into a visible one.
+
+| | re-arms after reboot | needs |
+| --- | --- | --- |
+| expo's boot receiver | yes | OEM autostart **and** first unlock |
+| our reconcile on app start | yes | the user opening the app |
+| neither | the reminder is lost | — and the row says so |
+
 **Two banners for one reminder — and both reports were true.** The next thing
 the phone showed was two "Task due" notifications where one reminder had been
 set. `dumpsys notification --noredact` settled it: both carried the payload
