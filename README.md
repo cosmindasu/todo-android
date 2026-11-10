@@ -437,10 +437,11 @@ Worth stating plainly: that was a prediction from reading the stylesheet, and
 the screenshot overruled it. The same shape of mistake as the rest of this
 section.
 
-Not covered: the editor at 1.3x with a due date, the reminder switch AND three
+Not covered by this run: the editor at 1.3x with a due date, the reminder switch AND three
 attached files, which is the tallest the form gets. MIUI refuses `adb shell
 input` without "USB debugging (Security settings)", so driving the app from the
 host was not an option here.
+Covered right after, by the attachment test below, and it found something.
 
 **Two banners for one reminder — and both reports were true.** The next thing
 the phone showed was two "Task due" notifications where one reminder had been
@@ -572,3 +573,37 @@ alarm-clock and calendar apps, and it would be the wrong one to learn.
 Navigation library / Expo Router (one screen + one modal does not need it),
 state library (plain `useState` + SQLite), remote push, auth, backend, iOS
 configuration, UI/component tests (only the pure notification logic is tested), Play Store assets.
+
+### Three files, a fourth refused, and a heading under the clock
+
+The limit holds and says so precisely. Picking two more files when one slot is
+left adds one and reports it:
+
+    Not everything could be attached
+    Only 1 file could be added: the limit is 3 per task, so 1 was left out.
+
+With `Files (3 of 3)`, each row showing its name and size, `Attach a file`
+disabled, and a line underneath explaining how to make room. The picker that
+opened was `com.google.android.documentsui`, not a Xiaomi one, and nothing in
+the log complained.
+
+The same screen showed a layout defect the empty editor had hidden: the heading
+`Edit task` drawn on top of the status bar clock. The cause is a distinction
+worth keeping:
+
+```ts
+<ScrollView contentContainerStyle={{ paddingTop: insets.top + 16, ... }}>
+```
+
+That inset is CONTENT, not a fixed margin. It positions the heading below the
+status bar at rest — which is why the empty editor looked right — and then
+scrolls away with everything else. A due date, a reminder switch and three
+files is enough to make the form scroll, and the heading slides under the
+translucent status bar.
+
+Keeping the padding is correct: the content should start below the bar. What
+was missing is an opaque band, the height of `insets.top`, painted after the
+ScrollView so it covers whatever scrolls up there — `pointerEvents="none"` so
+it never swallows a touch. The list screen never had the problem because its
+inset is on the container `View`, not on scrollable content, so nothing can
+pass under the bar in the first place.

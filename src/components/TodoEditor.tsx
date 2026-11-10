@@ -146,7 +146,18 @@ export function TodoEditor({ visible, todo, attachments, onCancel, onSave }: Pro
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         {/* Edge-to-edge is mandatory on Android 15+: content draws under the
-            status and navigation bars unless we pad by the insets ourselves. */}
+            status and navigation bars unless we pad by the insets ourselves.
+
+            The inset below is on contentContainerStyle, so it is CONTENT, not a
+            fixed margin: it puts the heading below the status bar at rest, and
+            then scrolls away with everything else. On a form short enough to
+            fit that is invisible; once it scrolls - a due date, a reminder and
+            three files is enough - the heading slides under the translucent
+            status bar and collides with the clock. Measured on the phone.
+
+            Keeping the padding is right, because the content should start below
+            the bar. What was missing is the band further down, which hides
+            whatever scrolls up there. */}
         <ScrollView
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{
@@ -300,6 +311,21 @@ export function TodoEditor({ visible, todo, attachments, onCancel, onSave }: Pro
             />
           </View>
         </ScrollView>
+        {/* Painted after the ScrollView, so it covers it. Opaque, the window's
+            own background colour, exactly as tall as the status bar: scrolled
+            content disappears behind it instead of colliding with the clock.
+            pointerEvents="none" so it never swallows a touch. */}
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: insets.top,
+            backgroundColor: t.background,
+          }}
+        />
       </KeyboardAvoidingView>
     </Modal>
   );
