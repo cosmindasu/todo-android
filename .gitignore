@@ -39,3 +39,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Demo recording: the harness and its deliverables stay out of git by decision.
+# The harness is throwaway tooling, and the video set runs to hundreds of MB.
+/e2e/recording/
+/_demo-video/
