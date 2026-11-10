@@ -85,7 +85,7 @@ export function ProjectBar({ projects, activeId, onSelect, onAdd, onLongPress }:
           { borderColor: t.border, opacity: pressed ? 0.6 : 1 },
         ]}
       >
-        <Text style={[styles.chipText, { color: t.text }]}>+ New</Text>
+        <Text style={[styles.chipText, { color: t.text }]}>+ New project</Text>
       </Pressable>
     </ScrollView>
   );

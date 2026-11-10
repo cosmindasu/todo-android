@@ -31,8 +31,8 @@ import { createKeyedMutex } from './keyedMutex';
 import {
   EXACT_ALARM_META_KEY,
   encodeExactAlarms,
-  exactAlarmStateChanged,
   planReconcile,
+  shouldForceResync,
 } from './reconcilePlan';
 
 /**
@@ -304,6 +304,14 @@ export function reconcileReminders(db: SQLiteDatabase): Promise<void> {
   return withTaskLock('reconcile', () => reconcileLocked(db));
 }
 
+/**
+ * Has a reconcile completed since this JS process started? Module scope, so it
+ * resets exactly when the process does - which is the point: see
+ * `shouldForceResync`. A reboot cannot happen without a new process, so this
+ * flag is what makes a reboot rebuild every alarm.
+ */
+let reconciledThisProcess = false;
+
 async function reconcileLocked(db: SQLiteDatabase): Promise<void> {
   const caps = await getCapabilities();
   // Without notification permission nothing can be scheduled. Return WITHOUT
@@ -312,7 +320,11 @@ async function reconcileLocked(db: SQLiteDatabase): Promise<void> {
   if (caps.notifications !== 'granted') return;
 
   const storedExact = await getMeta(db, EXACT_ALARM_META_KEY);
-  const forceResync = exactAlarmStateChanged(storedExact, caps.exactAlarms);
+  const forceResync = shouldForceResync({
+    processStart: !reconciledThisProcess,
+    storedExact,
+    exactAlarms: caps.exactAlarms,
+  });
 
   const [rows, scheduled, presented] = await Promise.all([
     listTodos(db),
@@ -357,6 +369,9 @@ async function reconcileLocked(db: SQLiteDatabase): Promise<void> {
   }
 
   // Record the state only after the rebuild succeeded, so a crash midway
-  // retries it on the next run instead of believing it is done.
+  // retries it on the next run instead of believing it is done. Same for the
+  // process flag: if this run threw, the next one must still treat itself as
+  // the first and rebuild everything.
   await setMeta(db, EXACT_ALARM_META_KEY, encodeExactAlarms(caps.exactAlarms));
+  reconciledThisProcess = true;
 }

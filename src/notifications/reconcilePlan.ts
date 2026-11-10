@@ -88,3 +88,44 @@ export function encodeExactAlarms(granted: boolean): string {
 export function exactAlarmStateChanged(stored: string | null, granted: boolean): boolean {
   return stored !== encodeExactAlarms(granted);
 }
+
+/**
+ * Should this reconcile rebuild EVERY alarm instead of only the ones that look
+ * missing?
+ *
+ * The cheap path asks expo whether an id is still scheduled. That question is
+ * answered from expo's OWN bookkeeping - a SharedPreferences file in the app's
+ * data directory (`SharedPreferencesNotificationsStore`) - not from the OS. The
+ * two can disagree, and when they do the cheap path believes the wrong one and
+ * leaves a dead reminder in place while the UI's bell says it is armed.
+ *
+ * Two ways they come apart, both measured on a real phone:
+ *
+ *  - EXACT-ALARM PERMISSION TOGGLED. Android drops or keeps the alarms itself;
+ *    expo's file does not change and expo has no receiver for that broadcast.
+ *
+ *  - A REBOOT. Android's AlarmManager forgets every alarm. expo's file does
+ *    not, and the thing that normally re-arms them is its BOOT_COMPLETED
+ *    receiver - which MIUI refuses to deliver unless the user has granted the
+ *    app "Autostart" (`BroadcastQueueInjector: process is not permitted to auto
+ *    start`). So the file still lists the notification, `scheduledIds` contains
+ *    it, `live` comes out true, and nothing is re-armed. The reminder is
+ *    silently dead. That is what a reboot test found: the task was still in the
+ *    future when the app was reopened, and the reminder never fired.
+ *
+ * `processStart` covers the reboot completely, because a device cannot reboot
+ * while the JS process is alive - a reboot ALWAYS implies the next reconcile is
+ * the first of a new process. It also covers a force-stop or a low-memory kill,
+ * where the same divergence is possible for the same reason.
+ *
+ * The cost is rebuilding a handful of alarms once per app start, which is
+ * nothing. The alternative is trusting a file the OS never reads.
+ */
+export function shouldForceResync(input: {
+  /** First reconcile since this JS process started. */
+  processStart: boolean;
+  storedExact: string | null;
+  exactAlarms: boolean;
+}): boolean {
+  return input.processStart || exactAlarmStateChanged(input.storedExact, input.exactAlarms);
+}

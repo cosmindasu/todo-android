@@ -308,12 +308,35 @@ now. The behaviour was written against this exact scenario and had only ever
 been exercised by unit tests. It is what makes the autostart block survivable
 rather than silent.
 
-Still open, because this run could not test it: whether reconcile RE-ARMS a
-reminder whose time is still in the future when the reboot dropped its alarm.
-That path depends on `getAllScheduledNotificationsAsync()` no longer listing it
-— and expo's store is the app's own bookkeeping, not the OS's, which is exactly
-the kind of claim this project does not take on trust. Testing it needs a
-reminder far enough out to survive a reboot.
+**It did not re-arm, and that was a real defect.** The second run answered the
+question the first could not: a reminder far enough out to survive the reboot,
+the app reopened while it was still in the future — and at the set time nothing
+happened.
+
+The cause is the divergence named above, taken one step further.
+`getAllScheduledNotificationsAsync()` does not ask the OS. It reads expo's own
+`SharedPreferencesNotificationsStore`, a file in the app's data directory. A
+reboot empties Android's AlarmManager and leaves that file untouched, and the
+thing that normally re-arms from it is the BOOT_COMPLETED receiver MIUI just
+refused to start. So the file still listed the notification, `planReconcile`
+computed `live = true`, and the cheap path left a dead reminder in place —
+while the bell in the list went on saying it was armed. An app that is careful
+to show only what is true was showing something false.
+
+The fix is `shouldForceResync` in `reconcilePlan.ts`: the FIRST reconcile of
+each JS process rebuilds every alarm instead of asking expo what it believes. A
+device cannot reboot while the process is alive, so a process start covers a
+reboot completely — and covers a force-stop and a low-memory kill too, where
+the same divergence is possible for the same reason. Later reconciles in the
+same process keep the cheap path. The cost is re-arming a handful of alarms
+once per app start; the alternative is trusting a file the OS never reads.
+
+Note what the two reboot runs cost and bought. The first one looked like a
+failure of expo's boot receiver and was really MIUI; the second looked like the
+same thing again and was really ours. Neither would have shown up on an
+emulator, and the second needed a reminder far enough out that the app could be
+reopened before it was due — the kind of detail that decides whether a test
+answers its question.
 
 **Two banners for one reminder — and both reports were true.** The next thing
 the phone showed was two "Task due" notifications where one reminder had been
