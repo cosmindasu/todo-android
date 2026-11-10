@@ -255,6 +255,30 @@ only what is true: the bell means an OS alarm really exists. On an OEM skin
 that guarantee stops one step short of the user. Nothing in the code can fix
 it; the honest response is to say so.
 
+**And the suppression is invisible to every Android-level diagnostic.** That
+sentence above started as an assumption; the device settled it. Turning MIUI's
+per-app toggles on made the sound and the banner work — and changed nothing
+observable:
+
+| | before | after |
+| --- | --- | --- |
+| channel `reminders` | `mImportance=4`, `mSound=content://settings/system/notification_sound`, `mUserLockedFields=0` | identical, field for field |
+| `cmd appops get <pkg>` | `POST_NOTIFICATION: allow`, `MIUIOP(10008): ignore` | unchanged, `MIUIOP(10008)` included |
+| `settings get global zen_mode` | `0` | `0` |
+
+So the toggles do not live in the notification channel, and they are not one of
+the Xiaomi-private app-ops either — `MIUIOP(10008)` stayed denied while the
+behaviour changed, which rules it out. (I had pointed at it as the likely
+culprit before running this comparison.) They live in MIUI's own store, behind
+no API and behind no readable flag.
+
+This is as far as the diagnosis can go, and it is far enough to be useful: the
+app cannot detect the condition, cannot warn about it, and cannot work around
+it. Measured, not assumed — a before/after on one device beats any amount of
+reading about OEM skins.
+
+Device for all of the above: Mi 9T Pro, Android 10 (API 29), MIUI V11.
+
 **Two banners for one reminder — and both reports were true.** The next thing
 the phone showed was two "Task due" notifications where one reminder had been
 set. `dumpsys notification --noredact` settled it: both carried the payload
