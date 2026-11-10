@@ -285,6 +285,32 @@ inside the notification's own payload and survives all of it, so the app asks
 the OS what it is still showing and matches on that. That also handles more
 than one leftover at a time, which a single column cannot represent.
 
+**Verified on the phone, after one wrong verdict of mine.** With the fix
+installed, setting the reminder again cleared both stale banners: nothing of the
+app's was left in the live notification list and the three tags had moved to the
+archive.
+
+I first reported the opposite. `dumpsys notification` prints the live list under
+`Notification List:` and then, at the SAME indentation, the history under
+`mArchive=Archive (74 notifications)`. My script tracked sections by looking for
+a line like `Something:`, which `mArchive=...` is not, so everything in the
+archive was still being attributed to the live list. Dismissed notifications
+read as displayed ones, and I announced a defect that did not exist.
+
+Two things tell a live entry from an archived one, and either is enough: a live
+one is printed as `NotificationRecord(0x…: pkg=…)` with its extras and
+`mUpdateTimeMs`, while an archived one is only a one-line
+`StatusBarNotification(pkg=…)`; and the archive begins at `mArchive=`. The
+check in this repo's notes is `grep -c 'NotificationRecord(.*<package>'` — zero
+means the shade is empty, whatever else the dump still lists.
+
+What should have stopped me sooner was the reading itself: every link of the
+chain I went looking through — `DateTrigger` implementing
+`SchedulableNotificationTrigger`, the `content.dataString` serialisation,
+`mapNotification` parsing it back, `getNotifyId` returning the same `0` the
+notification was posted with — came out correct. A defect whose every mechanism
+checks out is usually a measurement.
+
 ## Privacy / permissions
 <a id="privacy--permissions"></a>
 
