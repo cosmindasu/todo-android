@@ -6,10 +6,7 @@ launcher icon is actually judged.
 The adaptive foreground is NOT the square icon with the background removed.
 Android crops an adaptive icon to whatever shape the launcher wants, and only
 the central 66% is guaranteed to survive. So the mark is drawn, cropped to its
-own bounding box, then centred and scaled until its half-diagonal fits inside
-that circle with room to spare. Measured, not eyeballed: the raw composition
-sat at 0.315 of the canvas against a 0.33 limit, which is inside but has no
-margin for a launcher that crops a little harder.
+own bounding box, then centred and scaled against the rule Android states.
 """
 from PIL import Image, ImageDraw
 
@@ -51,14 +48,24 @@ def draw_mark(mono=False):
     return im
 
 
-def centred(mark, half_diag_frac):
-    """Crop the mark to its own bounds, then centre it on a square canvas scaled
-    so its half-diagonal is `half_diag_frac` of the side."""
+def centred(mark, bbox_frac):
+    """Crop to the content, centre it, and scale so its BOUNDING BOX is
+    `bbox_frac` of the canvas side.
+
+    The limit is a square, not a circle. Android: layers are 108x108 dp, "the
+    inner 66x66 dp of the icon appears within the masked viewport", and a logo
+    "must not exceed 66x66 dp" -- a centred square of 66/108 = 0.611 of the
+    side, never clipped by any OEM mask.
+
+    This file previously measured the half-DIAGONAL against 0.330, which is a
+    different test (and 72/108, the "usually visible" bound, not the guaranteed
+    one). It left this mark at 0.492 of the side where 0.611 was allowed: not
+    wrong, just drawn smaller than it had to be.
+    """
     box = mark.getbbox()
     m = mark.crop(box)
-    half = (m.width ** 2 + m.height ** 2) ** 0.5 / 2
-    scale = (half_diag_frac * C) / half
-    m = m.resize((max(1, int(m.width * scale)), max(1, int(m.height * scale))), Image.LANCZOS)
+    k = (bbox_frac * C) / max(m.width, m.height)
+    m = m.resize((max(1, int(m.width * k)), max(1, int(m.height * k))), Image.LANCZOS)
     out = Image.new('RGBA', (C, C), (0, 0, 0, 0))
     out.paste(m, ((C - m.width) // 2, (C - m.height) // 2), m)
     return out
@@ -71,17 +78,18 @@ def save(im, name):
 
 mark, mono = draw_mark(), draw_mark(mono=True)
 
-# 0.30 for the adaptive foreground: inside the 0.33 safe radius, with margin.
-fg = centred(mark, 0.30)
+# 0.58 of the side, against the 0.611 the safe zone allows: filling it exactly
+# would leave nothing for a squircle mask to round off.
+fg = centred(mark, 0.58)
 save(fg, 'android-icon-foreground.png')
-save(centred(mono, 0.30), 'android-icon-monochrome.png')
+save(centred(mono, 0.58), 'android-icon-monochrome.png')
 save(Image.new('RGBA', (C, C), BG + (255,)), 'android-icon-background.png')
 
 # The square icon is not cropped to a circle, so it can carry a larger mark.
 sq = Image.new('RGBA', (C, C), BG + (255,))
-big = centred(mark, 0.345)
+big = centred(mark, 0.66)   # the square icon is not masked, so it can be bigger
 sq.paste(big, (0, 0), big)
 save(sq, 'icon.png')
 
 # Splash: the mark on transparency, the window supplies the background.
-save(centred(mark, 0.26), 'splash-icon.png')
+save(centred(mark, 0.50), 'splash-icon.png')
