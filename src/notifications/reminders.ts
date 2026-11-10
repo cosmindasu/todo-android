@@ -26,6 +26,7 @@ import {
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { takeAttachmentsOf } from '../db/attachments';
 import { deleteStored } from '../files/attachmentStore';
+import { deliveredIdsOf } from './delivered';
 import { createKeyedMutex } from './keyedMutex';
 import {
   EXACT_ALARM_META_KEY,
@@ -211,12 +212,39 @@ export function cancelReminder(db: SQLiteDatabase, todoId: number): Promise<void
   return withTaskLock(lockKey(todoId), () => cancelLocked(db, todoId));
 }
 
-/** Only call while already holding the task's lock (the mutex is not re-entrant). */
+/**
+ * Only call while already holding the task's lock (the mutex is not re-entrant).
+ *
+ * TWO operations, not one. Un-arming a future alarm and clearing a banner that
+ * has already fired are separate things on Android, and this used to do only the
+ * first - so re-arming a reminder left the previous one sitting in the shade.
+ * See `delivered.ts` for the phone measurement that found it.
+ */
 async function cancelLocked(db: SQLiteDatabase, todoId: number): Promise<void> {
   const fresh = await getTodo(db, todoId);
   if (fresh?.notificationId) {
     await Notifications.cancelScheduledNotificationAsync(fresh.notificationId);
     await setNotificationId(db, todoId, null);
+  }
+  await dismissDeliveredOf(todoId);
+}
+
+/**
+ * Clear any already-delivered reminder for this task. Reached from every
+ * teardown path - editing the reminder, ticking the task off, deleting it - and
+ * from `reconcileReminders`, which only ever resyncs rows whose reminder has NOT
+ * fired yet (`planReconcile` routes a past-due row to `expired` instead). So
+ * this never wipes a reminder the user has not had a chance to see; it only
+ * removes banners whose task has moved on.
+ *
+ * Failures are swallowed on purpose: the alarm is already cancelled by the time
+ * we get here, and a stale banner is not worth failing a save over. On top of
+ * that `getPresentedNotificationsAsync` is Android-only.
+ */
+async function dismissDeliveredOf(todoId: number): Promise<void> {
+  const presented = await Notifications.getPresentedNotificationsAsync().catch(() => []);
+  for (const id of deliveredIdsOf(todoId, presented)) {
+    await Notifications.dismissNotificationAsync(id).catch(() => {});
   }
 }
 

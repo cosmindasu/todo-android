@@ -255,6 +255,36 @@ only what is true: the bell means an OS alarm really exists. On an OEM skin
 that guarantee stops one step short of the user. Nothing in the code can fix
 it; the honest response is to say so.
 
+**Two banners for one reminder — and both reports were true.** The next thing
+the phone showed was two "Task due" notifications where one reminder had been
+set. `dumpsys notification --noredact` settled it: both carried the payload
+`{"todoId":1}` — the same task — with different notification ids, and decoding
+expo's own serialised request out of each record gave their armed times, 12:18
+and 12:20, each posted at its own minute.
+
+So nothing had been scheduled twice. The reminder had been re-armed two minutes
+later, and **the notification already in the shade was never cleared**. On
+Android those are two operations served by two different parts of
+expo-notifications: `cancelScheduledNotificationAsync` reaches
+`ExpoSchedulingDelegate` and calls `alarmManager.cancel()`, while clearing a
+posted banner is `dismissNotificationAsync` → `ExpoPresentationDelegate` →
+`notificationManager.cancel()`. The app called only the first, so every
+teardown path — editing the reminder, ticking the task off, deleting it — left
+any banner that had already fired behind.
+
+The suppressed banner above is what made this reachable at all: the first fire
+was invisible, so the obvious thing to do was set the time again. "I only set
+one reminder" and "there are two notifications" were both accurate.
+
+The fix is in `src/notifications/delivered.ts`, and the interesting part is what
+it matches on. Dismissing `todos.notification_id` does not work, because by the
+time there is anything to dismiss that column is usually already null — a
+re-arm clears it, and so does `planReconcile`'s `expired` branch for a past-due
+row. The id needed is exactly the one just thrown away. The task id travels
+inside the notification's own payload and survives all of it, so the app asks
+the OS what it is still showing and matches on that. That also handles more
+than one leftover at a time, which a single column cannot represent.
+
 ## Privacy / permissions
 <a id="privacy--permissions"></a>
 
