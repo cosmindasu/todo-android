@@ -1,0 +1,32 @@
+A small, careful task list. Tasks, projects, due dates and reminders that go off when they should — and say so when they could not.
+
+WHAT IT DOES
+
+• Tasks with a title, notes and a due date
+• Projects, so separate lists stay separate
+• Three states, not two: to do, started, done — with the time each one happened
+• Up to three files per task, kept on the device
+• Reminders at the due time, through the system alarm
+
+REMINDERS THAT ADMIT WHEN THEY FAILED
+
+Android gives an app three separate ways to have a reminder silently never arrive: the notification channel, the notification permission, and the permission to schedule an exact alarm. Each fails differently and none of them reports an error — scheduling appears to succeed and nothing is ever shown.
+
+So this app checks all three and tells you which one is missing, with a button that takes you to the setting that fixes it. The bell on a task means an alarm really exists in the operating system, not that one was requested.
+
+When a reminder's time passes while no alarm was alive — the phone was off, a permission was revoked, the system dropped it — the app does not fire a late notification pretending the task is due now. It marks the task as missed, so you learn that it failed instead of quietly trusting it. Alarms are also rebuilt from scratch every time the app starts, because a reboot empties them and the system does not always hand them back.
+
+PRIVACY
+
+• No accounts, no sign-in
+• No INTERNET permission: the app cannot reach the network
+• No analytics, no ads
+• Nothing is uploaded; tasks and attached files stay on the device
+• Storage permissions are blocked outright — files arrive through the system picker
+
+The manifest does carry permissions this app never uses, merged in by the
+notification library it depends on: launcher badge counts, push messaging, and
+the Play install referrer. Nothing in the app calls them. They are listed one
+by one, with where each came from, in the project's README.
+
+Android only. Open source.
