@@ -338,6 +338,36 @@ emulator, and the second needed a reminder far enough out that the app could be
 reopened before it was due — the kind of detail that decides whether a test
 answers its question.
 
+**Verified, end to end.** Reminder set, phone rebooted, app reopened and left
+open:
+
+    RTC_WAKEUP #0: Alarm{ff37167 ...} uid 10217 ro.dbg.learningtodo
+      tag=*walarm*:expo.modules.notifications.NOTIFICATION_EVENT
+      when=2026-11-10 16:50:00.000   window=0
+
+    1 wakes 1 alarms, last -35s590ms
+    NotificationRecord(... tag=b787df79 ... importance=4)
+
+The reboot destroyed the alarm, MIUI refused the boot broadcast as before,
+reopening the app re-armed it, and it fired on time. `window=0` is an exact
+alarm, which on API 29 needs no permission.
+
+**A fourth run in between was wasted, and it is worth saying why.** The app was
+reopened after the reboot and the reminder still did not fire — which looked
+like the fix failing. The log said otherwise: MIUI killed the process nine
+seconds after launch, `Killing 4424 (adj 700): SwipeUpClean`, because the app
+had been swiped out of recents. Nine seconds was not enough. In the run that
+worked, the alarm was NOT yet armed 11 seconds after `ReactNativeJS: Running
+"main"` and was armed within 44 — a cold start has to load the bundle, open and
+migrate the database, and make several bridge round trips per row before
+anything reaches AlarmManager.
+
+That is a real limitation, not just a testing note: reopening the app after a
+reboot and immediately swiping it away does not re-arm anything. It also killed
+a theory before it got written down — that MIUI strips alarms when it kills a
+swiped-away app. Plausible, never demonstrated, and no longer needed to explain
+anything.
+
 **Two banners for one reminder — and both reports were true.** The next thing
 the phone showed was two "Task due" notifications where one reminder had been
 set. `dumpsys notification --noredact` settled it: both carried the payload
