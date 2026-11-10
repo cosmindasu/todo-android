@@ -227,6 +227,34 @@ and cannot silently change). Verified in a generated `android/gradle.properties`
 (`android.targetSdkVersion=36`). Consequences you will feel: edge-to-edge is
 enforced (hence the safe-area insets in the code) and predictive back is on.
 
+## What a stock Android emulator cannot tell you
+
+Measured on a physical Xiaomi Mi 9T Pro, Android 10 / MIUI V11, on a clean
+install — which turned out to differ from the emulator in two ways that matter.
+
+**Two of the three gates do not exist there.** `POST_NOTIFICATIONS` is Android
+13+, `SCHEDULE_EXACT_ALARM` is Android 12+. On Android 10 notifications are on
+by default and exact alarms need no permission, so no dialog appears and the
+banner never shows — which is correct, and was the prediction before the test.
+The gate code is only exercised on API 31+; the device-test recipe below needs
+a matching device or emulator to mean anything.
+
+**A delivered reminder can still not reach the user.** The first reminder
+appeared to fail completely. It had not: `dumpsys alarm` showed the alarm fired
+on time (`*walarm*:expo.modules.notifications.NOTIFICATION_EVENT`, two
+wakeups), and `dumpsys notification` showed the notification posted on the
+`reminders` channel at `mImportance=4`, not deleted, not blocked. It was
+sitting in the shade. MIUI had suppressed the heads-up banner and the sound,
+through per-app toggles — "Floating notifications", "Show on lock screen" —
+that default to off for a newly installed app and that Android exposes no API
+for. `areNotificationsEnabled()` returns true, the channel importance is HIGH,
+and the app has no way to know the user will never see it.
+
+This is worth knowing precisely because the app is careful elsewhere to show
+only what is true: the bell means an OS alarm really exists. On an OEM skin
+that guarantee stops one step short of the user. Nothing in the code can fix
+it; the honest response is to say so.
+
 ## Privacy / permissions
 <a id="privacy--permissions"></a>
 

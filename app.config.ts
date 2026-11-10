@@ -16,8 +16,8 @@ const isDevBuild =
   process.env.ALLOW_DEV_NETWORK === '1';
 
 const config: ExpoConfig = {
-  name: 'Learning Todo',
-  slug: 'learning-todo',
+  name: 'My Todo List',
+  slug: 'my-todo-list',
   version: '1.0.0',
   orientation: 'default',
   icon: './assets/icon.png',
@@ -27,6 +27,12 @@ const config: ExpoConfig = {
     supportsTablet: true,
   },
   android: {
+    // DELIBERATELY unchanged when the app was renamed to "My Todo List". A
+    // package name is the app's identity: Android keys installs, permissions
+    // and data on it, and Google Play fixes it permanently at the first
+    // upload. Renaming it would make this a different app that cannot upgrade
+    // over the installed one. The `scheme` is left alone for the same reason —
+    // anything holding a deep link binds to it.
     package: 'ro.dbg.learningtodo',
     adaptiveIcon: {
       backgroundColor: '#E6F4FE',
