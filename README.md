@@ -416,6 +416,32 @@ loss into a visible one.
 | our reconcile on app start | yes | the user opening the app |
 | neither | the reminder is lost | — and the row says so |
 
+### Largest font size: nothing broke, and the reason is not the one I assumed
+
+`settings put system font_scale 1.3` — Android 10's largest, and the value
+MIUI's own slider writes (there is no OEM-specific key; `settings list system |
+grep font` returns `font_scale` alone). Both screens hold up: the list keeps its
+header, its project chips including `+ New project`, a three-line wrap of the
+red overdue text and both buttons; the editor keeps every label, both inputs,
+the two chips and the Cancel/Save pair. Nothing clipped, nothing overlapping.
+
+I had expected the opposite. Every `lineHeight` in this app is a fixed number
+next to a `fontSize` that scales — `title: { fontSize: 28, lineHeight: 36 }` is
+a ratio of 1.29, so at 1.3x a non-scaling `lineHeight` would have clipped the
+header. It did not, because React Native scales `lineHeight` by the font scale
+too when `allowFontScaling` is on, which it is everywhere here (the app sets
+`allowFontScaling={false}` nowhere, and uses `minHeight` rather than fixed
+heights for its touch targets).
+
+Worth stating plainly: that was a prediction from reading the stylesheet, and
+the screenshot overruled it. The same shape of mistake as the rest of this
+section.
+
+Not covered: the editor at 1.3x with a due date, the reminder switch AND three
+attached files, which is the tallest the form gets. MIUI refuses `adb shell
+input` without "USB debugging (Security settings)", so driving the app from the
+host was not an option here.
+
 **Two banners for one reminder — and both reports were true.** The next thing
 the phone showed was two "Task due" notifications where one reminder had been
 set. `dumpsys notification --noredact` settled it: both carried the payload
