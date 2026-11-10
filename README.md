@@ -279,6 +279,42 @@ reading about OEM skins.
 
 Device for all of the above: Mi 9T Pro, Android 10 (API 29), MIUI V11.
 
+**A reboot kills every reminder, and MIUI says so out loud.** `reminders.ts`
+claims expo-notifications re-arms alarms after a reboot through
+`RECEIVE_BOOT_COMPLETED`. On this phone it does not, and the reason is not
+expo's: the permission is declared in the built APK and expo's receiver is
+registered for `BOOT_COMPLETED`, but MIUI never delivers the broadcast.
+
+    W BroadcastQueueInjector: Unable to launch app ro.dbg.learningtodo/10217
+      for broadcast Intent { act=android.intent.action.BOOT_COMPLETED ... }:
+      process is not permitted to auto start
+
+`BroadcastQueueInjector` is MIUI's, not AOSP's. Without the per-app "Autostart"
+permission the app is never started for the broadcast at all, so there is no
+code of ours or expo's that could run. Nothing in the manifest changes this.
+
+**What this proved instead was the recovery path.** A reminder due at 15:45 had
+no alarm behind it: the device finished booting at ~15:42 and the broadcast was
+refused at 15:43:17. Opening the app at 15:54 produced the right answer rather
+than a wrong one —
+
+    After 10 min
+    Overdue · 10 Nov 2026, 15:45 · Reminder may have been missed
+
+That is `planReconcile`'s `expired` branch with `missed: true`: the dead
+notification id is dropped and the row is flagged, and deliberately NO late
+notification is fired, because one arriving at 15:54 would claim the task is due
+now. The behaviour was written against this exact scenario and had only ever
+been exercised by unit tests. It is what makes the autostart block survivable
+rather than silent.
+
+Still open, because this run could not test it: whether reconcile RE-ARMS a
+reminder whose time is still in the future when the reboot dropped its alarm.
+That path depends on `getAllScheduledNotificationsAsync()` no longer listing it
+— and expo's store is the app's own bookkeeping, not the OS's, which is exactly
+the kind of claim this project does not take on trust. Testing it needs a
+reminder far enough out to survive a reboot.
+
 **Two banners for one reminder — and both reports were true.** The next thing
 the phone showed was two "Task due" notifications where one reminder had been
 set. `dumpsys notification --noredact` settled it: both carried the payload
